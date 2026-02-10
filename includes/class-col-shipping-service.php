@@ -104,6 +104,7 @@ class COL_Shipping_Service
         }
 
         $aggregated_rates = $this->shipment_rate_aggregator->aggregate($shipment_rates);
+        $rate_rule_snapshot = [];
         $meta_payload = [
             'plan_id' => $plan_result['plan_id'],
             'strategy' => $plan_result['strategy'],
@@ -111,11 +112,25 @@ class COL_Shipping_Service
             'shipment_count' => count($optimized_shipments),
             'shipments' => $optimized_shipments,
             'per_shipment_rates' => $shipment_rates,
+            'destination_area' => (string) ($context['destination_district_code'] ?? ''),
         ];
 
         foreach ($aggregated_rates as $rate) {
             $computed = $this->rule_engine->apply_surcharge_and_override($rate, $context);
             $rate_id = 'col:' . sanitize_title($computed['courier'] . '_' . $computed['service']);
+            $active_rule = implode('|', array_filter([
+                (string) ($computed['override_applied'] ?? ''),
+                (string) ($computed['surcharge_applied'] ?? ''),
+            ]));
+
+            $rate_rule_snapshot[$rate_id] = [
+                'courier' => (string) ($computed['courier'] ?? ''),
+                'service' => (string) ($computed['service'] ?? ''),
+                'estimated_cost' => (float) ($computed['price'] ?? 0),
+                'area' => (string) ($context['destination_district_code'] ?? ''),
+                'active_rule' => $active_rule,
+            ];
+
             $method->add_rate([
                 'id' => $rate_id,
                 'label' => sprintf(
@@ -132,6 +147,8 @@ class COL_Shipping_Service
                 ],
             ]);
         }
+
+        $meta_payload['rate_rule_snapshot'] = $rate_rule_snapshot;
 
         if (WC()->session) {
             WC()->session->set('col_last_plan_payload', $meta_payload);
@@ -154,6 +171,23 @@ class COL_Shipping_Service
         $order->update_meta_data('_col_shipment_count', (int) ($payload['shipment_count'] ?? 0));
         $order->update_meta_data('_col_per_shipment_cost', $payload['per_shipment_rates'] ?? []);
         $order->update_meta_data('_col_package_breakdown', $payload['shipments'] ?? []);
+        $order->update_meta_data('_col_destination_area', (string) ($payload['destination_area'] ?? ''));
+
+        $selected_rate = '';
+        if (isset($data['shipping_method']) && is_array($data['shipping_method']) && isset($data['shipping_method'][0])) {
+            $selected_rate = (string) $data['shipping_method'][0];
+        }
+
+        $selected_context = is_array($payload['rate_rule_snapshot'] ?? null)
+            ? ($payload['rate_rule_snapshot'][$selected_rate] ?? [])
+            : [];
+
+        if (! empty($selected_context)) {
+            $order->update_meta_data('_col_selected_estimated_cost', (float) ($selected_context['estimated_cost'] ?? 0));
+            $order->update_meta_data('_col_selected_courier', (string) ($selected_context['courier'] ?? ''));
+            $order->update_meta_data('_col_selected_service', (string) ($selected_context['service'] ?? ''));
+            $order->update_meta_data('_col_selected_rule_context', (string) ($selected_context['active_rule'] ?? ''));
+        }
     }
 
     private function resolve_shipment_plan(array $cart_lines): array

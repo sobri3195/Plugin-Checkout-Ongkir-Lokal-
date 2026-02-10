@@ -71,6 +71,8 @@ class COL_Settings
                 'anteraja' => 5000,
                 'default' => 6000,
             ],
+            'reconciliation_report_period_days' => 7,
+            'reconciliation_variance_threshold' => 5000,
         ];
 
         add_option($this->option_key, $defaults);
@@ -138,6 +140,8 @@ class COL_Settings
                 'anteraja' => 5000,
                 'default' => 6000,
             ],
+            'reconciliation_report_period_days' => 7,
+            'reconciliation_variance_threshold' => 5000,
         ]);
     }
 

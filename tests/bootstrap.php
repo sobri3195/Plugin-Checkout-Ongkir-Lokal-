@@ -34,3 +34,5 @@ require_once __DIR__ . '/../includes/class-col-logger.php';
 require_once __DIR__ . '/../includes/class-col-rule-engine.php';
 
 require_once __DIR__ . '/../includes/class-col-address-intelligence.php';
+
+require_once __DIR__ . '/../includes/class-col-cost-reconciliation-service.php';
