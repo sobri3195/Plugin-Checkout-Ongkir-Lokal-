@@ -13,6 +13,7 @@ require_once __DIR__ . '/class-col-shipment-planner.php';
 require_once __DIR__ . '/class-col-shipment-rate-aggregator.php';
 require_once __DIR__ . '/class-col-pickup-point-provider.php';
 require_once __DIR__ . '/class-col-pickup-point-service.php';
+require_once __DIR__ . '/class-col-cod-risk-service.php';
 
 class COL_Plugin
 {
@@ -23,6 +24,7 @@ class COL_Plugin
     private COL_Rule_Engine $rule_engine;
     private COL_Shipping_Service $shipping_service;
     private COL_Pickup_Point_Service $pickup_point_service;
+    private COL_COD_Risk_Service $cod_risk_service;
 
     public static function instance(): COL_Plugin
     {
@@ -57,10 +59,13 @@ class COL_Plugin
             $this->settings
         );
 
+        $this->cod_risk_service = new COL_COD_Risk_Service($this->settings, $this->rule_engine, $this->logger);
+
         add_action('woocommerce_shipping_init', [$this->shipping_service, 'register_shipping_method']);
         add_filter('woocommerce_shipping_methods', [$this->shipping_service, 'add_shipping_method']);
         add_action('admin_menu', [$this->settings, 'register_admin_menu']);
         $this->pickup_point_service->register();
+        $this->cod_risk_service->register();
 
         register_activation_hook(COL_PLUGIN_FILE, [$this, 'activate']);
     }
