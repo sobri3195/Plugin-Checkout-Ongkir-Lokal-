@@ -15,6 +15,7 @@ if (! function_exists('sanitize_title')) {
 require_once __DIR__ . '/../includes/class-col-origin-repository.php';
 require_once __DIR__ . '/../includes/class-col-shipment-planner.php';
 require_once __DIR__ . '/../includes/class-col-shipment-rate-aggregator.php';
+require_once __DIR__ . '/../includes/class-col-packaging-optimizer.php';
 
 
 if (! function_exists('current_time')) {

@@ -34,6 +34,43 @@ class COL_Settings
                 'order_time' => 15,
             ],
             'cod_risk_risky_hours' => [22, 23, 0, 1, 2, 3, 4],
+            'fallback_dimensions_cm' => [
+                'length' => 10,
+                'width' => 10,
+                'height' => 10,
+            ],
+            'box_presets' => [
+                [
+                    'id' => 'small',
+                    'name' => 'Small Box',
+                    'inner_length_cm' => 20,
+                    'inner_width_cm' => 20,
+                    'inner_height_cm' => 20,
+                    'max_weight_gram' => 5000,
+                ],
+                [
+                    'id' => 'medium',
+                    'name' => 'Medium Box',
+                    'inner_length_cm' => 30,
+                    'inner_width_cm' => 30,
+                    'inner_height_cm' => 30,
+                    'max_weight_gram' => 15000,
+                ],
+                [
+                    'id' => 'large',
+                    'name' => 'Large Box',
+                    'inner_length_cm' => 40,
+                    'inner_width_cm' => 40,
+                    'inner_height_cm' => 40,
+                    'max_weight_gram' => 30000,
+                ],
+            ],
+            'volumetric_divisors' => [
+                'jne' => 6000,
+                'jnt' => 6000,
+                'anteraja' => 5000,
+                'default' => 6000,
+            ],
         ];
 
         add_option($this->option_key, $defaults);
@@ -64,6 +101,43 @@ class COL_Settings
                 'order_time' => 15,
             ],
             'cod_risk_risky_hours' => [22, 23, 0, 1, 2, 3, 4],
+            'fallback_dimensions_cm' => [
+                'length' => 10,
+                'width' => 10,
+                'height' => 10,
+            ],
+            'box_presets' => [
+                [
+                    'id' => 'small',
+                    'name' => 'Small Box',
+                    'inner_length_cm' => 20,
+                    'inner_width_cm' => 20,
+                    'inner_height_cm' => 20,
+                    'max_weight_gram' => 5000,
+                ],
+                [
+                    'id' => 'medium',
+                    'name' => 'Medium Box',
+                    'inner_length_cm' => 30,
+                    'inner_width_cm' => 30,
+                    'inner_height_cm' => 30,
+                    'max_weight_gram' => 15000,
+                ],
+                [
+                    'id' => 'large',
+                    'name' => 'Large Box',
+                    'inner_length_cm' => 40,
+                    'inner_width_cm' => 40,
+                    'inner_height_cm' => 40,
+                    'max_weight_gram' => 30000,
+                ],
+            ],
+            'volumetric_divisors' => [
+                'jne' => 6000,
+                'jnt' => 6000,
+                'anteraja' => 5000,
+                'default' => 6000,
+            ],
         ]);
     }
 
