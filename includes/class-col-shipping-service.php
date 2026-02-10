@@ -55,7 +55,8 @@ class COL_Shipping_Service
         private COL_Rule_Engine $rule_engine,
         private COL_Logger $logger,
         private COL_Shipment_Planner $shipment_planner,
-        private COL_Shipment_Rate_Aggregator $shipment_rate_aggregator
+        private COL_Shipment_Rate_Aggregator $shipment_rate_aggregator,
+        private COL_Delivery_Promise_Engine $delivery_promise_engine
     ) {
     }
 
@@ -63,6 +64,7 @@ class COL_Shipping_Service
     {
         add_action('col_calculate_shipping_package', [$this, 'calculate_and_add_rates'], 10, 2);
         add_action('woocommerce_checkout_create_order', [$this, 'save_plan_order_metadata'], 10, 2);
+        add_action('woocommerce_order_status_completed', [$this, 'capture_actual_delivery'], 10, 1);
     }
 
     public function add_shipping_method(array $methods): array
@@ -100,21 +102,34 @@ class COL_Shipping_Service
         foreach ($aggregated_rates as $rate) {
             $computed = $this->rule_engine->apply_surcharge_and_override($rate, $context);
             $rate_id = 'col:' . sanitize_title($computed['courier'] . '_' . $computed['service']);
+            $promise = $this->delivery_promise_engine->build_promise(
+                $computed,
+                (int) ($plan_result['shipments'][0]['warehouse_id'] ?? 0)
+            );
+            $computed['eta_label'] = $promise['eta_label'];
             $method->add_rate([
                 'id' => $rate_id,
                 'label' => sprintf(
-                    '%s - %s (%s, %d pengiriman)',
+                    '%s - %s (%s, conf: %s, %d pengiriman)',
                     strtoupper($computed['courier']),
                     $computed['service'],
                     $computed['eta_label'],
+                    strtoupper($promise['confidence']),
                     $rate['shipment_count']
                 ),
                 'cost' => $computed['price'],
                 'meta_data' => [
                     'col_plan_payload' => wp_json_encode($meta_payload),
                     'col_service_key' => $rate_id,
+                    'col_delivery_promise' => wp_json_encode($promise),
                 ],
             ]);
+
+            $meta_payload['delivery_promises'][$rate_id] = [
+                'courier' => $computed['courier'],
+                'service' => $computed['service'],
+                'promise' => $promise,
+            ];
         }
 
         if (WC()->session) {
@@ -137,6 +152,7 @@ class COL_Shipping_Service
         $order->update_meta_data('_col_origin_list', $payload['origin_list'] ?? []);
         $order->update_meta_data('_col_shipment_count', (int) ($payload['shipment_count'] ?? 0));
         $order->update_meta_data('_col_per_shipment_cost', $payload['per_shipment_rates'] ?? []);
+        $order->update_meta_data('_col_delivery_promises', $payload['delivery_promises'] ?? []);
     }
 
     private function resolve_shipment_plan(array $cart_lines): array
@@ -317,5 +333,28 @@ class COL_Shipping_Service
 
         $decoded = json_decode($row->payload_json, true);
         return is_array($decoded) ? $decoded : [];
+    }
+
+
+    public function capture_actual_delivery(int $order_id): void
+    {
+        $order = wc_get_order($order_id);
+        if (! $order instanceof WC_Order) {
+            return;
+        }
+
+        $promises = $order->get_meta('_col_delivery_promises', true);
+        if (! is_array($promises) || empty($promises)) {
+            return;
+        }
+
+        $actual_delivery = $order->get_meta('_col_tracking_delivered_at', true);
+        if (! is_string($actual_delivery) || $actual_delivery === '') {
+            return;
+        }
+
+        $this->logger->log_delivery_promise_comparison($order_id, $promises, $actual_delivery, [
+            'tracking_payload' => $order->get_meta('_col_tracking_payload', true),
+        ]);
     }
 }
