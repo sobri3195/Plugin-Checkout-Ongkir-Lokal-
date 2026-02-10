@@ -11,12 +11,14 @@ require_once __DIR__ . '/class-col-logger.php';
 require_once __DIR__ . '/class-col-origin-repository.php';
 require_once __DIR__ . '/class-col-shipment-planner.php';
 require_once __DIR__ . '/class-col-shipment-rate-aggregator.php';
+require_once __DIR__ . '/class-col-packaging-optimizer.php';
+require_once __DIR__ . '/class-col-shipping-recommendation-engine.php';
 require_once __DIR__ . '/class-col-pickup-point-provider.php';
 require_once __DIR__ . '/class-col-pickup-point-service.php';
 require_once __DIR__ . '/class-col-cod-risk-service.php';
 require_once __DIR__ . '/class-col-address-intelligence.php';
 require_once __DIR__ . '/class-col-address-intelligence-service.php';
-require_once __DIR__ . '/class-col-delivery-promise-engine.php';
+require_once __DIR__ . '/class-col-cost-reconciliation-service.php';
 
 class COL_Plugin
 {
@@ -29,7 +31,7 @@ class COL_Plugin
     private COL_Pickup_Point_Service $pickup_point_service;
     private COL_COD_Risk_Service $cod_risk_service;
     private COL_Address_Intelligence_Service $address_intelligence_service;
-    private COL_Delivery_Promise_Engine $delivery_promise_engine;
+    private COL_Cost_Reconciliation_Service $cost_reconciliation_service;
 
     public static function instance(): COL_Plugin
     {
@@ -45,19 +47,23 @@ class COL_Plugin
         $this->settings = new COL_Settings();
         $this->logger = new COL_Logger();
         $this->rule_engine = new COL_Rule_Engine($this->settings, $this->logger);
+        $this->observability = new COL_Observability($this->settings);
 
         global $wpdb;
         $origin_repository = new COL_Origin_Repository($wpdb);
         $shipment_planner = new COL_Shipment_Planner($origin_repository);
         $shipment_rate_aggregator = new COL_Shipment_Rate_Aggregator();
-        $this->delivery_promise_engine = new COL_Delivery_Promise_Engine($wpdb);
+        $packaging_optimizer = new COL_Packaging_Optimizer();
+        $recommendation_engine = new COL_Shipping_Recommendation_Engine();
         $this->shipping_service = new COL_Shipping_Service(
             $this->settings,
             $this->rule_engine,
             $this->logger,
+            $this->observability,
             $shipment_planner,
             $shipment_rate_aggregator,
-            $this->delivery_promise_engine
+            $packaging_optimizer,
+            $recommendation_engine
         );
         $pickup_point_provider = new COL_Pickup_Point_Provider($this->settings);
         $this->pickup_point_service = new COL_Pickup_Point_Service(
@@ -68,6 +74,7 @@ class COL_Plugin
 
         $this->cod_risk_service = new COL_COD_Risk_Service($this->settings, $this->rule_engine, $this->logger);
         $this->address_intelligence_service = new COL_Address_Intelligence_Service(new COL_Address_Intelligence());
+        $this->cost_reconciliation_service = new COL_Cost_Reconciliation_Service($this->settings, $this->logger);
 
         add_action('woocommerce_shipping_init', [$this->shipping_service, 'register_shipping_method']);
         add_filter('woocommerce_shipping_methods', [$this->shipping_service, 'add_shipping_method']);
@@ -75,6 +82,7 @@ class COL_Plugin
         $this->pickup_point_service->register();
         $this->cod_risk_service->register();
         $this->address_intelligence_service->register();
+        $this->cost_reconciliation_service->register();
 
         register_activation_hook(COL_PLUGIN_FILE, [$this, 'activate']);
     }
@@ -192,39 +200,21 @@ class COL_Plugin
             KEY idx_warehouse_id (warehouse_id)
         ) {$charset_collate};";
 
-        $sql[] = "CREATE TABLE {$prefix}operational_calendar (
-            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-            date_key DATE NOT NULL,
-            warehouse_id BIGINT UNSIGNED NULL,
-            is_open TINYINT(1) DEFAULT 1,
-            note VARCHAR(191) DEFAULT '',
-            created_at DATETIME NOT NULL,
-            updated_at DATETIME NOT NULL,
-            UNIQUE KEY uniq_date_warehouse (date_key, warehouse_id),
-            KEY idx_date_open (date_key, is_open)
-        ) {$charset_collate};";
-
-        $sql[] = "CREATE TABLE {$prefix}delivery_promise_logs (
+        $sql[] = "CREATE TABLE {$prefix}cost_variances (
             id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
             order_id BIGINT UNSIGNED NOT NULL,
-            shipping_rate_id VARCHAR(100) NOT NULL,
-            courier VARCHAR(50) NOT NULL,
-            service VARCHAR(100) NOT NULL,
-            baseline_eta_label VARCHAR(50) DEFAULT '',
-            promised_min_days SMALLINT UNSIGNED NOT NULL,
-            promised_max_days SMALLINT UNSIGNED NOT NULL,
-            promised_min_date DATE NULL,
-            promised_max_date DATE NULL,
-            confidence_label VARCHAR(20) DEFAULT 'low',
-            reasons_json LONGTEXT NULL,
-            actual_delivery_at DATE NULL,
-            delta_days INT DEFAULT NULL,
-            tracking_payload_json LONGTEXT NULL,
-            created_at DATETIME NOT NULL,
-            updated_at DATETIME NOT NULL,
-            KEY idx_order_rate (order_id, shipping_rate_id),
-            KEY idx_courier_service (courier, service),
-            KEY idx_actual_delivery (actual_delivery_at)
+            courier VARCHAR(50) DEFAULT '',
+            service VARCHAR(100) DEFAULT '',
+            area_code VARCHAR(100) DEFAULT '',
+            active_rule VARCHAR(191) DEFAULT '',
+            estimated_cost DECIMAL(12,2) NOT NULL,
+            actual_cost DECIMAL(12,2) NOT NULL,
+            variance DECIMAL(12,2) NOT NULL,
+            source_reference VARCHAR(191) DEFAULT '',
+            reconciled_at DATETIME NOT NULL,
+            KEY idx_order_id (order_id),
+            KEY idx_grouping (courier, service, area_code),
+            KEY idx_reconciled_at (reconciled_at)
         ) {$charset_collate};";
 
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';

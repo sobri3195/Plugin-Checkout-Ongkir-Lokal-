@@ -54,9 +54,11 @@ class COL_Shipping_Service
         private COL_Settings $settings,
         private COL_Rule_Engine $rule_engine,
         private COL_Logger $logger,
+        private COL_Observability $observability,
         private COL_Shipment_Planner $shipment_planner,
         private COL_Shipment_Rate_Aggregator $shipment_rate_aggregator,
-        private COL_Delivery_Promise_Engine $delivery_promise_engine
+        private COL_Packaging_Optimizer $packaging_optimizer,
+        private COL_Shipping_Recommendation_Engine $recommendation_engine
     ) {
     }
 
@@ -64,7 +66,7 @@ class COL_Shipping_Service
     {
         add_action('col_calculate_shipping_package', [$this, 'calculate_and_add_rates'], 10, 2);
         add_action('woocommerce_checkout_create_order', [$this, 'save_plan_order_metadata'], 10, 2);
-        add_action('woocommerce_order_status_completed', [$this, 'capture_actual_delivery'], 10, 1);
+        add_action('woocommerce_review_order_before_submit', [$this, 'track_checkout_started']);
     }
 
     public function add_shipping_method(array $methods): array
@@ -83,45 +85,65 @@ class COL_Shipping_Service
             return;
         }
 
+        $settings = $this->settings->all();
         $shipment_rates = [];
-        foreach ($plan_result['shipments'] as $shipment) {
+        $optimized_shipments = [];
+
+        foreach ($plan_result['shipments'] as $shipment_index => $shipment) {
+            $shipment = $this->enrich_shipment_with_packaging($shipment, $settings);
+            $optimized_shipments[] = $shipment;
+
+            $this->logger->info('packaging_optimized', 'Packaging optimizer menghasilkan breakdown chargeable weight', [
+                'shipment_index' => $shipment_index,
+                'warehouse_id' => $shipment['warehouse_id'] ?? 0,
+                'origin_region_code' => $shipment['origin_region_code'] ?? '',
+                'package_breakdown' => $shipment['package_breakdown'] ?? [],
+                'chargeable_total_by_courier' => $shipment['chargeable_total_by_courier'] ?? [],
+                'dimension_fallback_used' => ! empty($shipment['dimension_fallback_used']),
+            ]);
+
             $cache_key = $this->build_cache_key($context, $shipment);
             $shipment_rates[] = $this->fetch_rates_with_antidown($context, $cache_key, $shipment);
         }
 
         $aggregated_rates = $this->shipment_rate_aggregator->aggregate($shipment_rates);
+        $ab_variant = $this->resolve_ab_variant();
+        $score_input = [];
         $meta_payload = [
             'plan_id' => $plan_result['plan_id'],
             'strategy' => $plan_result['strategy'],
-            'origin_list' => array_column($plan_result['shipments'], 'origin_region_code'),
-            'shipment_count' => count($plan_result['shipments']),
-            'shipments' => $plan_result['shipments'],
+            'origin_list' => array_column($optimized_shipments, 'origin_region_code'),
+            'shipment_count' => count($optimized_shipments),
+            'shipments' => $optimized_shipments,
             'per_shipment_rates' => $shipment_rates,
+            'ab_variant' => $ab_variant,
         ];
 
         foreach ($aggregated_rates as $rate) {
             $computed = $this->rule_engine->apply_surcharge_and_override($rate, $context);
             $rate_id = 'col:' . sanitize_title($computed['courier'] . '_' . $computed['service']);
-            $promise = $this->delivery_promise_engine->build_promise(
-                $computed,
-                (int) ($plan_result['shipments'][0]['warehouse_id'] ?? 0)
-            );
-            $computed['eta_label'] = $promise['eta_label'];
+            $active_rule = implode('|', array_filter([
+                (string) ($computed['override_applied'] ?? ''),
+                (string) ($computed['surcharge_applied'] ?? ''),
+            ]));
+
+            $rate_rule_snapshot[$rate_id] = [
+                'courier' => (string) ($computed['courier'] ?? ''),
+                'service' => (string) ($computed['service'] ?? ''),
+                'estimated_cost' => (float) ($computed['price'] ?? 0),
+                'area' => (string) ($context['destination_district_code'] ?? ''),
+                'active_rule' => $active_rule,
+            ];
+
             $method->add_rate([
                 'id' => $rate_id,
-                'label' => sprintf(
-                    '%s - %s (%s, conf: %s, %d pengiriman)',
-                    strtoupper($computed['courier']),
-                    $computed['service'],
-                    $computed['eta_label'],
-                    strtoupper($promise['confidence']),
-                    $rate['shipment_count']
-                ),
+                'label' => $label,
                 'cost' => $computed['price'],
                 'meta_data' => [
                     'col_plan_payload' => wp_json_encode($meta_payload),
                     'col_service_key' => $rate_id,
-                    'col_delivery_promise' => wp_json_encode($promise),
+                    'col_sr_badges' => $label_badges,
+                    'col_sr_is_recommended' => ($recommendation['recommended_rate_id'] ?? '') === $rate_id ? 'yes' : 'no',
                 ],
             ]);
 
@@ -132,8 +154,19 @@ class COL_Shipping_Service
             ];
         }
 
+        $meta_payload['rate_rule_snapshot'] = $rate_rule_snapshot;
+
         if (WC()->session) {
             WC()->session->set('col_last_plan_payload', $meta_payload);
+
+            $chosen = WC()->session->get('chosen_shipping_methods');
+            if (
+                $ab_variant === 'with_recommendation'
+                && ($recommendation['recommended_rate_id'] ?? '') !== ''
+                && (! is_array($chosen) || empty($chosen[0]))
+            ) {
+                WC()->session->set('chosen_shipping_methods', [(string) $recommendation['recommended_rate_id']]);
+            }
         }
     }
 
@@ -152,7 +185,24 @@ class COL_Shipping_Service
         $order->update_meta_data('_col_origin_list', $payload['origin_list'] ?? []);
         $order->update_meta_data('_col_shipment_count', (int) ($payload['shipment_count'] ?? 0));
         $order->update_meta_data('_col_per_shipment_cost', $payload['per_shipment_rates'] ?? []);
-        $order->update_meta_data('_col_delivery_promises', $payload['delivery_promises'] ?? []);
+        $order->update_meta_data('_col_package_breakdown', $payload['shipments'] ?? []);
+        $order->update_meta_data('_col_destination_area', (string) ($payload['destination_area'] ?? ''));
+
+        $selected_rate = '';
+        if (isset($data['shipping_method']) && is_array($data['shipping_method']) && isset($data['shipping_method'][0])) {
+            $selected_rate = (string) $data['shipping_method'][0];
+        }
+
+        $selected_context = is_array($payload['rate_rule_snapshot'] ?? null)
+            ? ($payload['rate_rule_snapshot'][$selected_rate] ?? [])
+            : [];
+
+        if (! empty($selected_context)) {
+            $order->update_meta_data('_col_selected_estimated_cost', (float) ($selected_context['estimated_cost'] ?? 0));
+            $order->update_meta_data('_col_selected_courier', (string) ($selected_context['courier'] ?? ''));
+            $order->update_meta_data('_col_selected_service', (string) ($selected_context['service'] ?? ''));
+            $order->update_meta_data('_col_selected_rule_context', (string) ($selected_context['active_rule'] ?? ''));
+        }
     }
 
     private function resolve_shipment_plan(array $cart_lines): array
@@ -208,6 +258,9 @@ class COL_Shipping_Service
                 'product_id' => (int) $product->get_id(),
                 'quantity' => (int) ($line['quantity'] ?? 1),
                 'unit_weight_gram' => max(1, (int) (($product->get_weight() ?: 0) * 1000)),
+                'unit_length_cm' => max(0, (int) ($product->get_length() ?: 0)),
+                'unit_width_cm' => max(0, (int) ($product->get_width() ?: 0)),
+                'unit_height_cm' => max(0, (int) ($product->get_height() ?: 0)),
             ];
         }
 
@@ -238,6 +291,7 @@ class COL_Shipping_Service
             $context['destination_city'],
             $context['destination_postcode'],
             $shipment['weight_gram'],
+            wp_json_encode($shipment['chargeable_total_by_courier'] ?? []),
             implode(',', $settings['enabled_couriers']),
         ]));
     }
@@ -247,25 +301,75 @@ class COL_Shipping_Service
         $cached = $this->get_cache($cache_key);
         if (! empty($cached)) {
             $this->logger->info('cache_hit', 'Rate cache hit', ['cache_status' => 'hit']);
+            $this->observability->record_metric_event('cache_hit', [
+                'provider' => $this->settings->all()['provider'] ?? '',
+                'area_code' => (string) ($context['destination_district_code'] ?? ''),
+                'cache_status' => 'hit',
+                'status' => 'success',
+            ]);
             return $cached;
         }
 
+        $this->observability->record_metric_event('cache_miss', [
+            'provider' => $this->settings->all()['provider'] ?? '',
+            'area_code' => (string) ($context['destination_district_code'] ?? ''),
+            'cache_status' => 'miss',
+            'status' => 'success',
+        ]);
+
         $settings = $this->settings->all();
+        $start_time = microtime(true);
         $live = $this->simulate_provider_call(
             $settings['enabled_couriers'],
             (int) $shipment['weight_gram'],
+            $shipment['chargeable_total_by_courier'] ?? [],
             (string) ($shipment['origin_region_code'] ?? ''),
             (string) $context['destination_district_code']
         );
+        $response_time_ms = (int) round((microtime(true) - $start_time) * 1000);
+        $is_timeout = $response_time_ms > ((int) ($settings['request_timeout_seconds'] ?? 7) * 1000);
 
         if (! empty($live)) {
             $this->set_cache($cache_key, $live, (int) $settings['cache_ttl_seconds']);
+            $this->observability->record_metric_event('provider_call', [
+                'provider' => $settings['provider'] ?? '',
+                'area_code' => (string) ($context['destination_district_code'] ?? ''),
+                'status' => 'success',
+                'response_time_ms' => $response_time_ms,
+                'is_timeout' => $is_timeout,
+            ]);
+
+            foreach ($live as $rate) {
+                $this->observability->record_metric_event('shipping_distribution', [
+                    'provider' => $settings['provider'] ?? '',
+                    'courier' => (string) ($rate['courier'] ?? ''),
+                    'area_code' => (string) ($context['destination_district_code'] ?? ''),
+                    'status' => 'success',
+                    'shipping_cost' => (int) ($rate['price'] ?? 0),
+                ]);
+            }
+
             return $live;
         }
+
+        $this->observability->record_metric_event('provider_call', [
+            'provider' => $settings['provider'] ?? '',
+            'area_code' => (string) ($context['destination_district_code'] ?? ''),
+            'status' => 'error',
+            'response_time_ms' => $response_time_ms,
+            'is_timeout' => $is_timeout,
+        ]);
 
         $fallback = $this->get_latest_stale_cache($cache_key, (int) $settings['stale_max_age_minutes']);
         if (! empty($fallback)) {
             $this->logger->warning('fallback_used', 'Menggunakan fallback tarif terakhir', [
+                'fallback_used' => true,
+                'cache_status' => 'stale',
+            ]);
+            $this->observability->record_metric_event('fallback_used', [
+                'provider' => $settings['provider'] ?? '',
+                'area_code' => (string) ($context['destination_district_code'] ?? ''),
+                'status' => 'error',
                 'fallback_used' => true,
                 'cache_status' => 'stale',
             ]);
@@ -274,6 +378,13 @@ class COL_Shipping_Service
 
         $this->logger->error('flat_rate_backup', 'API dan fallback gagal, pakai flat rate backup', [
             'fallback_used' => true,
+        ]);
+        $this->observability->record_metric_event('flat_rate_backup', [
+            'provider' => $settings['provider'] ?? '',
+            'area_code' => (string) ($context['destination_district_code'] ?? ''),
+            'status' => 'error',
+            'fallback_used' => true,
+            'shipping_cost' => (int) $settings['flat_rate_backup'],
         ]);
 
         return [[
@@ -284,7 +395,7 @@ class COL_Shipping_Service
         ]];
     }
 
-    private function simulate_provider_call(array $couriers, int $weight_gram, string $origin_region_code, string $destination_region_code): array
+    private function simulate_provider_call(array $couriers, int $weight_gram, array $chargeable_total_by_courier, string $origin_region_code, string $destination_region_code): array
     {
         if ($weight_gram > 30000) {
             return [];
@@ -293,15 +404,32 @@ class COL_Shipping_Service
         $distance_factor = $origin_region_code === $destination_region_code ? 1000 : 2500;
         $result = [];
         foreach ($couriers as $courier) {
+            $chargeable_weight = (int) ($chargeable_total_by_courier[$courier] ?? $chargeable_total_by_courier['default'] ?? $weight_gram);
             $result[] = [
                 'courier' => $courier,
                 'service' => 'REG',
                 'eta_label' => $origin_region_code === $destination_region_code ? '1-2 hari' : '2-4 hari',
-                'price' => 12000 + $distance_factor + (int) ceil($weight_gram / 1000) * 2000,
+                'price' => 12000 + $distance_factor + (int) ceil($chargeable_weight / 1000) * 2000,
             ];
         }
 
         return $result;
+    }
+
+    private function enrich_shipment_with_packaging(array $shipment, array $settings): array
+    {
+        $packaging_result = $this->packaging_optimizer->optimize(
+            $shipment['items'] ?? [],
+            $settings['box_presets'] ?? [],
+            $settings['volumetric_divisors'] ?? [],
+            $settings['fallback_dimensions_cm'] ?? []
+        );
+
+        $shipment['package_breakdown'] = $packaging_result['packages'];
+        $shipment['chargeable_total_by_courier'] = $packaging_result['chargeable_total_by_courier'];
+        $shipment['dimension_fallback_used'] = $packaging_result['dimension_fallback_used'];
+
+        return $shipment;
     }
 
     private function get_cache(string $cache_key): array

@@ -19,6 +19,8 @@ if (! function_exists('sanitize_title')) {
 require_once __DIR__ . '/../includes/class-col-origin-repository.php';
 require_once __DIR__ . '/../includes/class-col-shipment-planner.php';
 require_once __DIR__ . '/../includes/class-col-shipment-rate-aggregator.php';
+require_once __DIR__ . '/../includes/class-col-packaging-optimizer.php';
+require_once __DIR__ . '/../includes/class-col-shipping-recommendation-engine.php';
 
 
 if (! function_exists('current_time')) {
@@ -38,11 +40,17 @@ require_once __DIR__ . '/../includes/class-col-rule-engine.php';
 
 require_once __DIR__ . '/../includes/class-col-address-intelligence.php';
 
-if (! function_exists('wp_timezone')) {
-    function wp_timezone(): DateTimeZone
+if (! function_exists('wp_parse_args')) {
+    function wp_parse_args($args, $defaults = [])
     {
-        return new DateTimeZone('UTC');
+        if (is_object($args)) {
+            $args = get_object_vars($args);
+        }
+
+        if (! is_array($args)) {
+            parse_str((string) $args, $args);
+        }
+
+        return array_merge($defaults, $args);
     }
 }
-
-require_once __DIR__ . '/../includes/class-col-delivery-promise-engine.php';
