@@ -54,6 +54,7 @@ class COL_Shipping_Service
         private COL_Settings $settings,
         private COL_Rule_Engine $rule_engine,
         private COL_Logger $logger,
+        private COL_Observability $observability,
         private COL_Shipment_Planner $shipment_planner,
         private COL_Shipment_Rate_Aggregator $shipment_rate_aggregator,
         private COL_Packaging_Optimizer $packaging_optimizer,
@@ -294,10 +295,24 @@ class COL_Shipping_Service
         $cached = $this->get_cache($cache_key);
         if (! empty($cached)) {
             $this->logger->info('cache_hit', 'Rate cache hit', ['cache_status' => 'hit']);
+            $this->observability->record_metric_event('cache_hit', [
+                'provider' => $this->settings->all()['provider'] ?? '',
+                'area_code' => (string) ($context['destination_district_code'] ?? ''),
+                'cache_status' => 'hit',
+                'status' => 'success',
+            ]);
             return $cached;
         }
 
+        $this->observability->record_metric_event('cache_miss', [
+            'provider' => $this->settings->all()['provider'] ?? '',
+            'area_code' => (string) ($context['destination_district_code'] ?? ''),
+            'cache_status' => 'miss',
+            'status' => 'success',
+        ]);
+
         $settings = $this->settings->all();
+        $start_time = microtime(true);
         $live = $this->simulate_provider_call(
             $settings['enabled_couriers'],
             (int) $shipment['weight_gram'],
@@ -305,15 +320,50 @@ class COL_Shipping_Service
             (string) ($shipment['origin_region_code'] ?? ''),
             (string) $context['destination_district_code']
         );
+        $response_time_ms = (int) round((microtime(true) - $start_time) * 1000);
+        $is_timeout = $response_time_ms > ((int) ($settings['request_timeout_seconds'] ?? 7) * 1000);
 
         if (! empty($live)) {
             $this->set_cache($cache_key, $live, (int) $settings['cache_ttl_seconds']);
+            $this->observability->record_metric_event('provider_call', [
+                'provider' => $settings['provider'] ?? '',
+                'area_code' => (string) ($context['destination_district_code'] ?? ''),
+                'status' => 'success',
+                'response_time_ms' => $response_time_ms,
+                'is_timeout' => $is_timeout,
+            ]);
+
+            foreach ($live as $rate) {
+                $this->observability->record_metric_event('shipping_distribution', [
+                    'provider' => $settings['provider'] ?? '',
+                    'courier' => (string) ($rate['courier'] ?? ''),
+                    'area_code' => (string) ($context['destination_district_code'] ?? ''),
+                    'status' => 'success',
+                    'shipping_cost' => (int) ($rate['price'] ?? 0),
+                ]);
+            }
+
             return $live;
         }
+
+        $this->observability->record_metric_event('provider_call', [
+            'provider' => $settings['provider'] ?? '',
+            'area_code' => (string) ($context['destination_district_code'] ?? ''),
+            'status' => 'error',
+            'response_time_ms' => $response_time_ms,
+            'is_timeout' => $is_timeout,
+        ]);
 
         $fallback = $this->get_latest_stale_cache($cache_key, (int) $settings['stale_max_age_minutes']);
         if (! empty($fallback)) {
             $this->logger->warning('fallback_used', 'Menggunakan fallback tarif terakhir', [
+                'fallback_used' => true,
+                'cache_status' => 'stale',
+            ]);
+            $this->observability->record_metric_event('fallback_used', [
+                'provider' => $settings['provider'] ?? '',
+                'area_code' => (string) ($context['destination_district_code'] ?? ''),
+                'status' => 'error',
                 'fallback_used' => true,
                 'cache_status' => 'stale',
             ]);
@@ -322,6 +372,13 @@ class COL_Shipping_Service
 
         $this->logger->error('flat_rate_backup', 'API dan fallback gagal, pakai flat rate backup', [
             'fallback_used' => true,
+        ]);
+        $this->observability->record_metric_event('flat_rate_backup', [
+            'provider' => $settings['provider'] ?? '',
+            'area_code' => (string) ($context['destination_district_code'] ?? ''),
+            'status' => 'error',
+            'fallback_used' => true,
+            'shipping_cost' => (int) $settings['flat_rate_backup'],
         ]);
 
         return [[

@@ -47,6 +47,7 @@ class COL_Plugin
         $this->settings = new COL_Settings();
         $this->logger = new COL_Logger();
         $this->rule_engine = new COL_Rule_Engine($this->settings, $this->logger);
+        $this->observability = new COL_Observability($this->settings);
 
         global $wpdb;
         $origin_repository = new COL_Origin_Repository($wpdb);
@@ -58,6 +59,7 @@ class COL_Plugin
             $this->settings,
             $this->rule_engine,
             $this->logger,
+            $this->observability,
             $shipment_planner,
             $shipment_rate_aggregator,
             $packaging_optimizer,
