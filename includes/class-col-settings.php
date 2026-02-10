@@ -71,6 +71,9 @@ class COL_Settings
                 'anteraja' => 5000,
                 'default' => 6000,
             ],
+            'observability_alert_threshold_pct' => 35,
+            'observability_alert_email' => get_option('admin_email', ''),
+            'observability_slack_webhook' => '',
         ];
 
         add_option($this->option_key, $defaults);
@@ -138,6 +141,9 @@ class COL_Settings
                 'anteraja' => 5000,
                 'default' => 6000,
             ],
+            'observability_alert_threshold_pct' => 35,
+            'observability_alert_email' => get_option('admin_email', ''),
+            'observability_slack_webhook' => '',
         ]);
     }
 
@@ -183,6 +189,9 @@ class COL_Settings
         }
         echo '</td></tr>';
         echo '<tr><th scope="row">Jam Rawan (0-23)</th><td><input type="text" class="regular-text" name="cod_risk_risky_hours" value="' . esc_attr($risky_hours) . '"><p class="description">Pisahkan dengan koma. Contoh: 22,23,0,1,2</p></td></tr>';
+        echo '<tr><th scope="row">Threshold Alert Anomali (%)</th><td><input type="number" min="1" max="500" name="observability_alert_threshold_pct" value="' . esc_attr((string) ($settings['observability_alert_threshold_pct'] ?? 35)) . '"></td></tr>';
+        echo '<tr><th scope="row">Email Notifikasi</th><td><input type="email" class="regular-text" name="observability_alert_email" value="' . esc_attr((string) ($settings['observability_alert_email'] ?? '')) . '"></td></tr>';
+        echo '<tr><th scope="row">Slack Webhook</th><td><input type="url" class="regular-text" name="observability_slack_webhook" value="' . esc_attr((string) ($settings['observability_slack_webhook'] ?? '')) . '"><p class="description">Opsional: incoming webhook URL untuk alert anomali.</p></td></tr>';
         echo '</tbody></table>';
         submit_button('Simpan Pengaturan');
         echo '</form>';
@@ -208,6 +217,10 @@ class COL_Settings
         $current['cod_risk_risky_hours'] = array_values(array_unique(array_filter(array_map(static function (string $value): int {
             return max(0, min(23, (int) $value));
         }, $hours), static fn(int $hour): bool => $hour >= 0 && $hour <= 23)));
+
+        $current['observability_alert_threshold_pct'] = max(1, min(500, (int) ($_POST['observability_alert_threshold_pct'] ?? 35)));
+        $current['observability_alert_email'] = isset($_POST['observability_alert_email']) ? sanitize_email((string) wp_unslash($_POST['observability_alert_email'])) : '';
+        $current['observability_slack_webhook'] = isset($_POST['observability_slack_webhook']) ? esc_url_raw((string) wp_unslash($_POST['observability_slack_webhook'])) : '';
 
         update_option($this->option_key, $current);
     }

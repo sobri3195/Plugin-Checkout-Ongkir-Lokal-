@@ -17,6 +17,7 @@ require_once __DIR__ . '/class-col-pickup-point-service.php';
 require_once __DIR__ . '/class-col-cod-risk-service.php';
 require_once __DIR__ . '/class-col-address-intelligence.php';
 require_once __DIR__ . '/class-col-address-intelligence-service.php';
+require_once __DIR__ . '/class-col-observability.php';
 
 class COL_Plugin
 {
@@ -29,6 +30,7 @@ class COL_Plugin
     private COL_Pickup_Point_Service $pickup_point_service;
     private COL_COD_Risk_Service $cod_risk_service;
     private COL_Address_Intelligence_Service $address_intelligence_service;
+    private COL_Observability $observability;
 
     public static function instance(): COL_Plugin
     {
@@ -44,6 +46,7 @@ class COL_Plugin
         $this->settings = new COL_Settings();
         $this->logger = new COL_Logger();
         $this->rule_engine = new COL_Rule_Engine($this->settings, $this->logger);
+        $this->observability = new COL_Observability($this->settings);
 
         global $wpdb;
         $origin_repository = new COL_Origin_Repository($wpdb);
@@ -54,6 +57,7 @@ class COL_Plugin
             $this->settings,
             $this->rule_engine,
             $this->logger,
+            $this->observability,
             $shipment_planner,
             $shipment_rate_aggregator,
             $packaging_optimizer
@@ -74,6 +78,7 @@ class COL_Plugin
         $this->pickup_point_service->register();
         $this->cod_risk_service->register();
         $this->address_intelligence_service->register();
+        $this->observability->register();
 
         register_activation_hook(COL_PLUGIN_FILE, [$this, 'activate']);
     }
@@ -188,6 +193,50 @@ class COL_Plugin
             UNIQUE KEY uniq_product_origin (product_id, warehouse_id),
             KEY idx_product_priority (product_id, priority),
             KEY idx_warehouse_id (warehouse_id)
+        ) {$charset_collate};";
+
+        $sql[] = "CREATE TABLE {$prefix}metric_events (
+            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            event_name VARCHAR(100) NOT NULL,
+            provider VARCHAR(50) DEFAULT '',
+            courier VARCHAR(50) DEFAULT '',
+            area_code VARCHAR(50) DEFAULT '',
+            status VARCHAR(20) DEFAULT '',
+            cache_status VARCHAR(20) DEFAULT '',
+            fallback_used TINYINT(1) DEFAULT 0,
+            is_timeout TINYINT(1) DEFAULT 0,
+            response_time_ms INT UNSIGNED DEFAULT 0,
+            shipping_cost INT UNSIGNED DEFAULT 0,
+            meta_json LONGTEXT NULL,
+            created_at DATETIME NOT NULL,
+            KEY idx_created_at (created_at),
+            KEY idx_provider (provider),
+            KEY idx_area_code (area_code),
+            KEY idx_courier (courier)
+        ) {$charset_collate};";
+
+        $sql[] = "CREATE TABLE {$prefix}metric_rollups (
+            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            period_type VARCHAR(20) NOT NULL,
+            period_start DATETIME NOT NULL,
+            provider VARCHAR(50) DEFAULT '',
+            courier VARCHAR(50) DEFAULT '',
+            area_code VARCHAR(50) DEFAULT '',
+            metrics_json LONGTEXT NOT NULL,
+            created_at DATETIME NOT NULL,
+            UNIQUE KEY uniq_rollup (period_type, period_start, provider, courier, area_code)
+        ) {$charset_collate};";
+
+        $sql[] = "CREATE TABLE {$prefix}metric_anomalies (
+            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            metric_key VARCHAR(100) NOT NULL,
+            observed_value DECIMAL(12,4) NOT NULL,
+            baseline_value DECIMAL(12,4) NOT NULL,
+            deviation_pct DECIMAL(12,4) NOT NULL,
+            status VARCHAR(20) DEFAULT 'open',
+            notified_at DATETIME NULL,
+            created_at DATETIME NOT NULL,
+            KEY idx_metric_created (metric_key, created_at)
         ) {$charset_collate};";
 
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';
