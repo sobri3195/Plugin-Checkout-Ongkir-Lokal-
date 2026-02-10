@@ -71,6 +71,19 @@ class COL_Settings
                 'anteraja' => 5000,
                 'default' => 6000,
             ],
+            'smart_shipping_weights' => [
+                'price' => 35,
+                'eta' => 25,
+                'reliability' => 20,
+                'margin_impact' => 20,
+            ],
+            'courier_reliability' => [
+                'jne' => 85,
+                'jnt' => 78,
+                'anteraja' => 80,
+                'backup' => 60,
+                'default' => 70,
+            ],
         ];
 
         add_option($this->option_key, $defaults);
@@ -138,6 +151,19 @@ class COL_Settings
                 'anteraja' => 5000,
                 'default' => 6000,
             ],
+            'smart_shipping_weights' => [
+                'price' => 35,
+                'eta' => 25,
+                'reliability' => 20,
+                'margin_impact' => 20,
+            ],
+            'courier_reliability' => [
+                'jne' => 85,
+                'jnt' => 78,
+                'anteraja' => 80,
+                'backup' => 60,
+                'default' => 70,
+            ],
         ]);
     }
 
@@ -151,6 +177,15 @@ class COL_Settings
             [$this, 'render_settings_page'],
             'dashicons-location-alt',
             56
+        );
+
+        add_submenu_page(
+            'checkout-ongkir-lokal',
+            __('Smart Shipping Dashboard', 'checkout-ongkir-lokal'),
+            __('Smart Shipping Dashboard', 'checkout-ongkir-lokal'),
+            'manage_woocommerce',
+            'checkout-ongkir-lokal-dashboard',
+            [$this, 'render_smart_shipping_dashboard']
         );
     }
 
@@ -187,6 +222,77 @@ class COL_Settings
         submit_button('Simpan Pengaturan');
         echo '</form>';
         echo '</div>';
+    }
+
+    public function render_smart_shipping_dashboard(): void
+    {
+        if (! current_user_can('manage_woocommerce')) {
+            return;
+        }
+
+        $metrics = $this->get_smart_shipping_metrics();
+
+        echo '<div class="wrap"><h1>Smart Shipping Recommendation Dashboard</h1>';
+        echo '<p>Performa eksperimen A/B mode tanpa rekomendasi vs dengan rekomendasi.</p>';
+        echo '<table class="widefat striped" style="max-width:900px"><thead><tr><th>Variant</th><th>Checkout Exposure</th><th>Orders</th><th>Conversion Rate</th><th>Average Shipping Cost</th></tr></thead><tbody>';
+
+        foreach ($metrics as $variant => $row) {
+            echo '<tr>';
+            echo '<td>' . esc_html($variant) . '</td>';
+            echo '<td>' . esc_html((string) $row['exposure']) . '</td>';
+            echo '<td>' . esc_html((string) $row['orders']) . '</td>';
+            echo '<td>' . esc_html(number_format_i18n((float) $row['conversion_rate'], 2)) . '%</td>';
+            echo '<td>Rp ' . esc_html(number_format_i18n((float) $row['avg_shipping_cost'], 0)) . '</td>';
+            echo '</tr>';
+        }
+
+        echo '</tbody></table></div>';
+    }
+
+    private function get_smart_shipping_metrics(): array
+    {
+        global $wpdb;
+
+        $table = $wpdb->prefix . 'col_logs';
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT event_type, context_json FROM {$table} WHERE event_type IN (%s, %s) ORDER BY id DESC LIMIT 5000",
+            'checkout_started',
+            'shipping_method_selected'
+        ), ARRAY_A);
+
+        $metrics = [
+            'without_recommendation' => ['exposure' => 0, 'orders' => 0, 'shipping_total' => 0.0, 'avg_shipping_cost' => 0.0, 'conversion_rate' => 0.0],
+            'with_recommendation' => ['exposure' => 0, 'orders' => 0, 'shipping_total' => 0.0, 'avg_shipping_cost' => 0.0, 'conversion_rate' => 0.0],
+        ];
+
+        foreach ($rows as $row) {
+            $context = json_decode((string) ($row['context_json'] ?? ''), true);
+            if (! is_array($context)) {
+                continue;
+            }
+
+            $variant = (string) ($context['ab_variant'] ?? 'without_recommendation');
+            if (! isset($metrics[$variant])) {
+                $metrics[$variant] = ['exposure' => 0, 'orders' => 0, 'shipping_total' => 0.0, 'avg_shipping_cost' => 0.0, 'conversion_rate' => 0.0];
+            }
+
+            if (($row['event_type'] ?? '') === 'checkout_started') {
+                $metrics[$variant]['exposure']++;
+            }
+
+            if (($row['event_type'] ?? '') === 'shipping_method_selected') {
+                $metrics[$variant]['orders']++;
+                $metrics[$variant]['shipping_total'] += (float) ($context['selected_cost'] ?? 0);
+            }
+        }
+
+        foreach ($metrics as $variant => $row) {
+            $metrics[$variant]['conversion_rate'] = $row['exposure'] > 0 ? ($row['orders'] / $row['exposure']) * 100 : 0.0;
+            $metrics[$variant]['avg_shipping_cost'] = $row['orders'] > 0 ? $row['shipping_total'] / $row['orders'] : 0.0;
+            unset($metrics[$variant]['shipping_total']);
+        }
+
+        return $metrics;
     }
 
     private function save_settings(): void
