@@ -17,6 +17,7 @@ require_once __DIR__ . '/class-col-pickup-point-service.php';
 require_once __DIR__ . '/class-col-cod-risk-service.php';
 require_once __DIR__ . '/class-col-address-intelligence.php';
 require_once __DIR__ . '/class-col-address-intelligence-service.php';
+require_once __DIR__ . '/class-col-ruleset-sandbox-service.php';
 
 class COL_Plugin
 {
@@ -29,6 +30,7 @@ class COL_Plugin
     private COL_Pickup_Point_Service $pickup_point_service;
     private COL_COD_Risk_Service $cod_risk_service;
     private COL_Address_Intelligence_Service $address_intelligence_service;
+    private COL_Ruleset_Sandbox_Service $ruleset_sandbox_service;
 
     public static function instance(): COL_Plugin
     {
@@ -67,6 +69,7 @@ class COL_Plugin
 
         $this->cod_risk_service = new COL_COD_Risk_Service($this->settings, $this->rule_engine, $this->logger);
         $this->address_intelligence_service = new COL_Address_Intelligence_Service(new COL_Address_Intelligence());
+        $this->ruleset_sandbox_service = new COL_Ruleset_Sandbox_Service($wpdb, $this->logger);
 
         add_action('woocommerce_shipping_init', [$this->shipping_service, 'register_shipping_method']);
         add_filter('woocommerce_shipping_methods', [$this->shipping_service, 'add_shipping_method']);
@@ -74,6 +77,7 @@ class COL_Plugin
         $this->pickup_point_service->register();
         $this->cod_risk_service->register();
         $this->address_intelligence_service->register();
+        $this->ruleset_sandbox_service->register();
 
         register_activation_hook(COL_PLUGIN_FILE, [$this, 'activate']);
     }
@@ -188,6 +192,47 @@ class COL_Plugin
             UNIQUE KEY uniq_product_origin (product_id, warehouse_id),
             KEY idx_product_priority (product_id, priority),
             KEY idx_warehouse_id (warehouse_id)
+        ) {$charset_collate};";
+
+        $sql[] = "CREATE TABLE {$prefix}rulesets (
+            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            version INT UNSIGNED NOT NULL,
+            status VARCHAR(30) NOT NULL,
+            rules_json LONGTEXT NOT NULL,
+            created_by BIGINT UNSIGNED NOT NULL,
+            approved_by BIGINT UNSIGNED DEFAULT 0,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            UNIQUE KEY uniq_version (version),
+            KEY idx_status_version (status, version)
+        ) {$charset_collate};";
+
+        $sql[] = "CREATE TABLE {$prefix}ruleset_audit (
+            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            ruleset_id BIGINT UNSIGNED NOT NULL,
+            actor_id BIGINT UNSIGNED NOT NULL,
+            action VARCHAR(100) NOT NULL,
+            before_json LONGTEXT NULL,
+            after_json LONGTEXT NULL,
+            meta_json LONGTEXT NULL,
+            created_at DATETIME NOT NULL,
+            KEY idx_ruleset (ruleset_id),
+            KEY idx_actor (actor_id),
+            KEY idx_action_time (action, created_at)
+        ) {$charset_collate};";
+
+        $sql[] = "CREATE TABLE {$prefix}rule_simulations (
+            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            ruleset_id BIGINT UNSIGNED NOT NULL,
+            status VARCHAR(30) NOT NULL,
+            progress_percent TINYINT UNSIGNED DEFAULT 0,
+            message VARCHAR(255) DEFAULT '',
+            result_json LONGTEXT NULL,
+            created_by BIGINT UNSIGNED NOT NULL,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            KEY idx_ruleset_status (ruleset_id, status),
+            KEY idx_created_at (created_at)
         ) {$charset_collate};";
 
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';
