@@ -199,10 +199,12 @@ class COL_Shipping_Service
             return $carry + ($line['quantity'] * $line['unit_weight_gram']);
         }, 0);
 
+        $confirmed_area = class_exists('COL_Address_Intelligence_Service') ? COL_Address_Intelligence_Service::get_confirmed_area_from_session() : [];
+
         return [
-            'destination_city' => $package['destination']['city'] ?? '',
-            'destination_postcode' => $package['destination']['postcode'] ?? '',
-            'destination_district_code' => $package['destination']['state'] ?? '',
+            'destination_city' => $confirmed_area['city'] ?? ($package['destination']['city'] ?? ''),
+            'destination_postcode' => $confirmed_area['postal_code'] ?? ($package['destination']['postcode'] ?? ''),
+            'destination_district_code' => $confirmed_area['district'] ?? ($package['destination']['state'] ?? ''),
             'weight_gram' => max(1, $total_weight),
             'cart_total' => WC()->cart ? (float) WC()->cart->get_subtotal() : 0,
             'product_tags' => [],
