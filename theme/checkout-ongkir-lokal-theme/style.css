@@ -1,0 +1,32 @@
+/*
+Theme Name: Checkout Ongkir Lokal Companion
+Theme URI: https://example.com/checkout-ongkir-lokal-companion
+Author: Checkout Ongkir Lokal
+Author URI: https://example.com
+Description: Theme pendamping WooCommerce untuk plugin Checkout Ongkir Lokal. Disertakan agar kebutuhan upload WordPress Theme (ZIP installable) dapat dipenuhi.
+Version: 1.0.0
+Requires at least: 6.0
+Tested up to: 6.6
+Requires PHP: 8.0
+License: GPL-2.0-or-later
+License URI: https://www.gnu.org/licenses/gpl-2.0.html
+Text Domain: checkout-ongkir-lokal-companion
+Tags: e-commerce, woocommerce, custom-logo, custom-menu
+*/
+
+:root {
+  --col-primary: #2563eb;
+  --col-text: #111827;
+  --col-bg: #f9fafb;
+}
+
+body {
+  margin: 0;
+  color: var(--col-text);
+  background: var(--col-bg);
+  font-family: "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+a {
+  color: var(--col-primary);
+}

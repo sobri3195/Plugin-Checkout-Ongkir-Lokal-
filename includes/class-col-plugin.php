@@ -18,6 +18,7 @@ require_once __DIR__ . '/class-col-pickup-point-service.php';
 require_once __DIR__ . '/class-col-cod-risk-service.php';
 require_once __DIR__ . '/class-col-address-intelligence.php';
 require_once __DIR__ . '/class-col-address-intelligence-service.php';
+require_once __DIR__ . '/class-col-cost-reconciliation-service.php';
 
 class COL_Plugin
 {
@@ -30,6 +31,7 @@ class COL_Plugin
     private COL_Pickup_Point_Service $pickup_point_service;
     private COL_COD_Risk_Service $cod_risk_service;
     private COL_Address_Intelligence_Service $address_intelligence_service;
+    private COL_Cost_Reconciliation_Service $cost_reconciliation_service;
 
     public static function instance(): COL_Plugin
     {
@@ -70,6 +72,7 @@ class COL_Plugin
 
         $this->cod_risk_service = new COL_COD_Risk_Service($this->settings, $this->rule_engine, $this->logger);
         $this->address_intelligence_service = new COL_Address_Intelligence_Service(new COL_Address_Intelligence());
+        $this->cost_reconciliation_service = new COL_Cost_Reconciliation_Service($this->settings, $this->logger);
 
         add_action('woocommerce_shipping_init', [$this->shipping_service, 'register_shipping_method']);
         add_filter('woocommerce_shipping_methods', [$this->shipping_service, 'add_shipping_method']);
@@ -77,6 +80,7 @@ class COL_Plugin
         $this->pickup_point_service->register();
         $this->cod_risk_service->register();
         $this->address_intelligence_service->register();
+        $this->cost_reconciliation_service->register();
 
         register_activation_hook(COL_PLUGIN_FILE, [$this, 'activate']);
     }
@@ -191,6 +195,23 @@ class COL_Plugin
             UNIQUE KEY uniq_product_origin (product_id, warehouse_id),
             KEY idx_product_priority (product_id, priority),
             KEY idx_warehouse_id (warehouse_id)
+        ) {$charset_collate};";
+
+        $sql[] = "CREATE TABLE {$prefix}cost_variances (
+            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            order_id BIGINT UNSIGNED NOT NULL,
+            courier VARCHAR(50) DEFAULT '',
+            service VARCHAR(100) DEFAULT '',
+            area_code VARCHAR(100) DEFAULT '',
+            active_rule VARCHAR(191) DEFAULT '',
+            estimated_cost DECIMAL(12,2) NOT NULL,
+            actual_cost DECIMAL(12,2) NOT NULL,
+            variance DECIMAL(12,2) NOT NULL,
+            source_reference VARCHAR(191) DEFAULT '',
+            reconciled_at DATETIME NOT NULL,
+            KEY idx_order_id (order_id),
+            KEY idx_grouping (courier, service, area_code),
+            KEY idx_reconciled_at (reconciled_at)
         ) {$charset_collate};";
 
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';

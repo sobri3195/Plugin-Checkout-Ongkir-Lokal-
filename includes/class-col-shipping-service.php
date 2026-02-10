@@ -121,40 +121,18 @@ class COL_Shipping_Service
         foreach ($aggregated_rates as $rate) {
             $computed = $this->rule_engine->apply_surcharge_and_override($rate, $context);
             $rate_id = 'col:' . sanitize_title($computed['courier'] . '_' . $computed['service']);
-            $score_input[] = [
-                'rate_id' => $rate_id,
+            $active_rule = implode('|', array_filter([
+                (string) ($computed['override_applied'] ?? ''),
+                (string) ($computed['surcharge_applied'] ?? ''),
+            ]));
+
+            $rate_rule_snapshot[$rate_id] = [
                 'courier' => (string) ($computed['courier'] ?? ''),
                 'service' => (string) ($computed['service'] ?? ''),
-                'price' => (int) ($computed['price'] ?? 0),
-                'eta_label' => (string) ($computed['eta_label'] ?? ''),
+                'estimated_cost' => (float) ($computed['price'] ?? 0),
+                'area' => (string) ($context['destination_district_code'] ?? ''),
+                'active_rule' => $active_rule,
             ];
-        }
-
-        $recommendation = $ab_variant === 'with_recommendation'
-            ? $this->recommendation_engine->score_rates($score_input, (float) $context['cart_total'], $settings)
-            : ['is_available' => false, 'scores' => [], 'recommended_rate_id' => '', 'badges' => []];
-
-        $meta_payload['recommendation'] = $recommendation;
-
-        foreach ($aggregated_rates as $rate) {
-            $computed = $this->rule_engine->apply_surcharge_and_override($rate, $context);
-            $rate_id = 'col:' . sanitize_title($computed['courier'] . '_' . $computed['service']);
-            $label_badges = $recommendation['badges'][$rate_id] ?? [];
-            $label = sprintf(
-                '%s - %s (%s, %d pengiriman)',
-                strtoupper($computed['courier']),
-                $computed['service'],
-                $computed['eta_label'],
-                $rate['shipment_count']
-            );
-
-            if (! empty($label_badges)) {
-                $label .= ' [' . implode(' / ', array_unique($label_badges)) . ']';
-            }
-
-            if (($recommendation['recommended_rate_id'] ?? '') === $rate_id) {
-                $label .= ' ★ Recommended';
-            }
 
             $method->add_rate([
                 'id' => $rate_id,
@@ -168,6 +146,8 @@ class COL_Shipping_Service
                 ],
             ]);
         }
+
+        $meta_payload['rate_rule_snapshot'] = $rate_rule_snapshot;
 
         if (WC()->session) {
             WC()->session->set('col_last_plan_payload', $meta_payload);
@@ -199,65 +179,23 @@ class COL_Shipping_Service
         $order->update_meta_data('_col_shipment_count', (int) ($payload['shipment_count'] ?? 0));
         $order->update_meta_data('_col_per_shipment_cost', $payload['per_shipment_rates'] ?? []);
         $order->update_meta_data('_col_package_breakdown', $payload['shipments'] ?? []);
-        $order->update_meta_data('_col_sr_ab_variant', $payload['ab_variant'] ?? 'without_recommendation');
-        $order->update_meta_data('_col_sr_recommendation', $payload['recommendation'] ?? []);
+        $order->update_meta_data('_col_destination_area', (string) ($payload['destination_area'] ?? ''));
 
-        $selected_method = '';
-        $shipping_methods = $data['shipping_method'] ?? [];
-        if (is_array($shipping_methods) && ! empty($shipping_methods[0])) {
-            $selected_method = (string) $shipping_methods[0];
+        $selected_rate = '';
+        if (isset($data['shipping_method']) && is_array($data['shipping_method']) && isset($data['shipping_method'][0])) {
+            $selected_rate = (string) $data['shipping_method'][0];
         }
 
-        $recommended_method = (string) (($payload['recommendation']['recommended_rate_id'] ?? ''));
-        $scores = is_array($payload['recommendation']['scores'] ?? null) ? $payload['recommendation']['scores'] : [];
-        $selected_cost = isset($scores[$selected_method]['price']) ? (int) $scores[$selected_method]['price'] : 0;
+        $selected_context = is_array($payload['rate_rule_snapshot'] ?? null)
+            ? ($payload['rate_rule_snapshot'][$selected_rate] ?? [])
+            : [];
 
-        $this->logger->info('shipping_method_selected', 'User memilih layanan pengiriman pada checkout', [
-            'ab_variant' => $payload['ab_variant'] ?? 'without_recommendation',
-            'selected_method' => $selected_method,
-            'recommended_method' => $recommended_method,
-            'selected_is_recommended' => $selected_method !== '' && $selected_method === $recommended_method,
-            'selected_cost' => $selected_cost,
-        ]);
-    }
-
-    public function track_checkout_started(): void
-    {
-        if (! WC()->session) {
-            return;
+        if (! empty($selected_context)) {
+            $order->update_meta_data('_col_selected_estimated_cost', (float) ($selected_context['estimated_cost'] ?? 0));
+            $order->update_meta_data('_col_selected_courier', (string) ($selected_context['courier'] ?? ''));
+            $order->update_meta_data('_col_selected_service', (string) ($selected_context['service'] ?? ''));
+            $order->update_meta_data('_col_selected_rule_context', (string) ($selected_context['active_rule'] ?? ''));
         }
-
-        if (WC()->session->get('col_sr_checkout_started_logged')) {
-            return;
-        }
-
-        $payload = WC()->session->get('col_last_plan_payload');
-        if (! is_array($payload)) {
-            return;
-        }
-
-        $this->logger->info('checkout_started', 'Checkout exposure untuk eksperimen smart shipping recommendation', [
-            'ab_variant' => $payload['ab_variant'] ?? 'without_recommendation',
-            'has_recommendation' => ! empty($payload['recommendation']['recommended_rate_id']),
-        ]);
-
-        WC()->session->set('col_sr_checkout_started_logged', true);
-    }
-
-    private function resolve_ab_variant(): string
-    {
-        if (! WC()->session) {
-            return 'without_recommendation';
-        }
-
-        $existing = WC()->session->get('col_sr_ab_variant');
-        if (in_array($existing, ['without_recommendation', 'with_recommendation'], true)) {
-            return $existing;
-        }
-
-        $variant = wp_rand(0, 1) === 1 ? 'with_recommendation' : 'without_recommendation';
-        WC()->session->set('col_sr_ab_variant', $variant);
-        return $variant;
     }
 
     private function resolve_shipment_plan(array $cart_lines): array

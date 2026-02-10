@@ -151,19 +151,8 @@ class COL_Settings
                 'anteraja' => 5000,
                 'default' => 6000,
             ],
-            'smart_shipping_weights' => [
-                'price' => 35,
-                'eta' => 25,
-                'reliability' => 20,
-                'margin_impact' => 20,
-            ],
-            'courier_reliability' => [
-                'jne' => 85,
-                'jnt' => 78,
-                'anteraja' => 80,
-                'backup' => 60,
-                'default' => 70,
-            ],
+            'reconciliation_report_period_days' => 7,
+            'reconciliation_variance_threshold' => 5000,
         ]);
     }
 
