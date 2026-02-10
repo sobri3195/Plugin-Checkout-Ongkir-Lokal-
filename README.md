@@ -67,6 +67,25 @@ Plugin membuat custom table (prefix `wp_col_` mengikuti prefix database WordPres
 - `woocommerce_shipping_methods`
 - `admin_menu`
 
+
+## Paket WordPress Theme (ZIP Installable)
+
+Jika platform upload Anda menampilkan pesan **"WordPress Theme is required"**, gunakan folder tema pendamping yang sudah disiapkan di repository ini:
+
+- Lokasi tema: `theme/checkout-ongkir-lokal-theme/`
+- File inti tema: `style.css`, `index.php`, `functions.php`
+
+Cara membuat ZIP installable untuk upload Theme:
+
+```bash
+cd theme
+zip -r checkout-ongkir-lokal-theme.zip checkout-ongkir-lokal-theme
+```
+
+Lalu upload file `checkout-ongkir-lokal-theme.zip` pada halaman upload tema WordPress.
+
+> Catatan: fitur ongkir tetap berasal dari plugin **Checkout Ongkir Lokal**. Tema ini disediakan untuk memenuhi kebutuhan paket Theme installable.
+
 ## Pengujian
 
 Repository sudah menyiapkan unit test berbasis PHPUnit di folder `tests/`.
