@@ -24,6 +24,30 @@ if (class_exists('WC_Shipping_Method') && ! class_exists('COL_Shipping_Method'))
     }
 }
 
+if (class_exists('WC_Shipping_Method') && ! class_exists('COL_Pickup_Point_Shipping_Method')) {
+    class COL_Pickup_Point_Shipping_Method extends WC_Shipping_Method
+    {
+        public function __construct()
+        {
+            $this->id = 'col_pickup_point';
+            $this->method_title = 'Ambil di Pickup Point';
+            $this->method_description = 'Pengiriman ke pickup point/PUDO terdekat.';
+            $this->enabled = 'yes';
+            $this->title = 'Ambil di Pickup Point';
+            $this->supports = ['shipping-zones', 'instance-settings'];
+        }
+
+        public function calculate_shipping($package = []): void
+        {
+            $this->add_rate([
+                'id' => $this->id,
+                'label' => $this->title,
+                'cost' => 0,
+            ]);
+        }
+    }
+}
+
 class COL_Shipping_Service
 {
     public function __construct(
@@ -44,6 +68,7 @@ class COL_Shipping_Service
     public function add_shipping_method(array $methods): array
     {
         $methods['checkout_ongkir_lokal'] = 'COL_Shipping_Method';
+        $methods['col_pickup_point'] = 'COL_Pickup_Point_Shipping_Method';
         return $methods;
     }
 
