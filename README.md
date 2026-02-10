@@ -76,7 +76,7 @@ Jika platform upload Anda menampilkan pesan **"WordPress Theme is required"**, g
 - File inti tema: `style.css`, `index.php`, `functions.php`
 
 Cara membuat ZIP installable untuk upload Theme:
-
+jj
 ```bash
 cd theme
 zip -r checkout-ongkir-lokal-theme.zip checkout-ongkir-lokal-theme
