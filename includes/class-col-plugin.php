@@ -178,6 +178,7 @@ class COL_Plugin
             name VARCHAR(191) NOT NULL,
             address TEXT NULL,
             region_code VARCHAR(50) NOT NULL,
+            cutoff_time CHAR(5) NOT NULL DEFAULT '15:00',
             priority SMALLINT UNSIGNED DEFAULT 100,
             is_active TINYINT(1) DEFAULT 1,
             created_at DATETIME NOT NULL,

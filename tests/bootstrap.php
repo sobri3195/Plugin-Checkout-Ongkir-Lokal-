@@ -4,6 +4,10 @@ if (! defined('ABSPATH')) {
     define('ABSPATH', __DIR__ . '/../');
 }
 
+if (! defined('DAY_IN_SECONDS')) {
+    define('DAY_IN_SECONDS', 86400);
+}
+
 if (! function_exists('sanitize_title')) {
     function sanitize_title(string $title): string
     {

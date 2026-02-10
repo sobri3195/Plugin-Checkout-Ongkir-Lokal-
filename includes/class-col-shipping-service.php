@@ -146,6 +146,12 @@ class COL_Shipping_Service
                     'col_sr_is_recommended' => ($recommendation['recommended_rate_id'] ?? '') === $rate_id ? 'yes' : 'no',
                 ],
             ]);
+
+            $meta_payload['delivery_promises'][$rate_id] = [
+                'courier' => $computed['courier'],
+                'service' => $computed['service'],
+                'promise' => $promise,
+            ];
         }
 
         $meta_payload['rate_rule_snapshot'] = $rate_rule_snapshot;
@@ -455,5 +461,28 @@ class COL_Shipping_Service
 
         $decoded = json_decode($row->payload_json, true);
         return is_array($decoded) ? $decoded : [];
+    }
+
+
+    public function capture_actual_delivery(int $order_id): void
+    {
+        $order = wc_get_order($order_id);
+        if (! $order instanceof WC_Order) {
+            return;
+        }
+
+        $promises = $order->get_meta('_col_delivery_promises', true);
+        if (! is_array($promises) || empty($promises)) {
+            return;
+        }
+
+        $actual_delivery = $order->get_meta('_col_tracking_delivered_at', true);
+        if (! is_string($actual_delivery) || $actual_delivery === '') {
+            return;
+        }
+
+        $this->logger->log_delivery_promise_comparison($order_id, $promises, $actual_delivery, [
+            'tracking_payload' => $order->get_meta('_col_tracking_payload', true),
+        ]);
     }
 }
