@@ -22,6 +22,7 @@ class COL_Settings
             'flat_rate_backup' => 18000,
             'stale_max_age_minutes' => 720,
             'enabled_couriers' => ['jne', 'jnt', 'anteraja'],
+            'shipment_strategy' => 'balanced',
         ];
 
         add_option($this->option_key, $defaults);
@@ -40,6 +41,7 @@ class COL_Settings
             'flat_rate_backup' => 18000,
             'stale_max_age_minutes' => 720,
             'enabled_couriers' => ['jne', 'jnt', 'anteraja'],
+            'shipment_strategy' => 'balanced',
         ]);
     }
 

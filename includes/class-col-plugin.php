@@ -8,6 +8,9 @@ require_once __DIR__ . '/class-col-settings.php';
 require_once __DIR__ . '/class-col-shipping-service.php';
 require_once __DIR__ . '/class-col-rule-engine.php';
 require_once __DIR__ . '/class-col-logger.php';
+require_once __DIR__ . '/class-col-origin-repository.php';
+require_once __DIR__ . '/class-col-shipment-planner.php';
+require_once __DIR__ . '/class-col-shipment-rate-aggregator.php';
 
 class COL_Plugin
 {
@@ -32,7 +35,18 @@ class COL_Plugin
         $this->settings = new COL_Settings();
         $this->logger = new COL_Logger();
         $this->rule_engine = new COL_Rule_Engine($this->settings, $this->logger);
-        $this->shipping_service = new COL_Shipping_Service($this->settings, $this->rule_engine, $this->logger);
+
+        global $wpdb;
+        $origin_repository = new COL_Origin_Repository($wpdb);
+        $shipment_planner = new COL_Shipment_Planner($origin_repository);
+        $shipment_rate_aggregator = new COL_Shipment_Rate_Aggregator();
+        $this->shipping_service = new COL_Shipping_Service(
+            $this->settings,
+            $this->rule_engine,
+            $this->logger,
+            $shipment_planner,
+            $shipment_rate_aggregator
+        );
 
         add_action('woocommerce_shipping_init', [$this->shipping_service, 'register_shipping_method']);
         add_filter('woocommerce_shipping_methods', [$this->shipping_service, 'add_shipping_method']);
@@ -125,6 +139,32 @@ class COL_Plugin
             normalized_hash VARCHAR(64) NOT NULL,
             updated_at DATETIME NOT NULL,
             UNIQUE KEY uniq_provider_hash (provider, normalized_hash)
+        ) {$charset_collate};";
+
+        $sql[] = "CREATE TABLE {$prefix}warehouses (
+            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            name VARCHAR(191) NOT NULL,
+            address TEXT NULL,
+            region_code VARCHAR(50) NOT NULL,
+            priority SMALLINT UNSIGNED DEFAULT 100,
+            is_active TINYINT(1) DEFAULT 1,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            KEY idx_priority (priority),
+            KEY idx_region_code (region_code)
+        ) {$charset_collate};";
+
+        $sql[] = "CREATE TABLE {$prefix}product_origins (
+            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            product_id BIGINT UNSIGNED NOT NULL,
+            warehouse_id BIGINT UNSIGNED NOT NULL,
+            stock_qty INT UNSIGNED DEFAULT 0,
+            priority SMALLINT UNSIGNED DEFAULT 100,
+            is_fallback TINYINT(1) DEFAULT 0,
+            updated_at DATETIME NOT NULL,
+            UNIQUE KEY uniq_product_origin (product_id, warehouse_id),
+            KEY idx_product_priority (product_id, priority),
+            KEY idx_warehouse_id (warehouse_id)
         ) {$charset_collate};";
 
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';
