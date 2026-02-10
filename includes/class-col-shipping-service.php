@@ -29,13 +29,16 @@ class COL_Shipping_Service
     public function __construct(
         private COL_Settings $settings,
         private COL_Rule_Engine $rule_engine,
-        private COL_Logger $logger
+        private COL_Logger $logger,
+        private COL_Shipment_Planner $shipment_planner,
+        private COL_Shipment_Rate_Aggregator $shipment_rate_aggregator
     ) {
     }
 
     public function register_shipping_method(): void
     {
         add_action('col_calculate_shipping_package', [$this, 'calculate_and_add_rates'], 10, 2);
+        add_action('woocommerce_checkout_create_order', [$this, 'save_plan_order_metadata'], 10, 2);
     }
 
     public function add_shipping_method(array $methods): array
@@ -47,51 +50,156 @@ class COL_Shipping_Service
     public function calculate_and_add_rates(WC_Shipping_Method $method, array $package): void
     {
         $context = $this->build_context($package);
-        $cache_key = $this->build_cache_key($context);
+        $plan_result = $this->resolve_shipment_plan($context['cart_lines']);
 
-        $rates = $this->fetch_rates_with_antidown($context, $cache_key);
+        if (! $plan_result['is_available']) {
+            return;
+        }
 
-        foreach ($rates as $rate) {
+        $shipment_rates = [];
+        foreach ($plan_result['shipments'] as $shipment) {
+            $cache_key = $this->build_cache_key($context, $shipment);
+            $shipment_rates[] = $this->fetch_rates_with_antidown($context, $cache_key, $shipment);
+        }
+
+        $aggregated_rates = $this->shipment_rate_aggregator->aggregate($shipment_rates);
+        $meta_payload = [
+            'plan_id' => $plan_result['plan_id'],
+            'strategy' => $plan_result['strategy'],
+            'origin_list' => array_column($plan_result['shipments'], 'origin_region_code'),
+            'shipment_count' => count($plan_result['shipments']),
+            'shipments' => $plan_result['shipments'],
+            'per_shipment_rates' => $shipment_rates,
+        ];
+
+        foreach ($aggregated_rates as $rate) {
             $computed = $this->rule_engine->apply_surcharge_and_override($rate, $context);
+            $rate_id = 'col:' . sanitize_title($computed['courier'] . '_' . $computed['service']);
             $method->add_rate([
-                'id' => 'col:' . sanitize_title($computed['courier'] . '_' . $computed['service']),
-                'label' => sprintf('%s - %s (%s)', strtoupper($computed['courier']), $computed['service'], $computed['eta_label']),
+                'id' => $rate_id,
+                'label' => sprintf(
+                    '%s - %s (%s, %d pengiriman)',
+                    strtoupper($computed['courier']),
+                    $computed['service'],
+                    $computed['eta_label'],
+                    $rate['shipment_count']
+                ),
                 'cost' => $computed['price'],
+                'meta_data' => [
+                    'col_plan_payload' => wp_json_encode($meta_payload),
+                    'col_service_key' => $rate_id,
+                ],
             ]);
         }
+
+        if (WC()->session) {
+            WC()->session->set('col_last_plan_payload', $meta_payload);
+        }
+    }
+
+    public function save_plan_order_metadata(WC_Order $order, array $data): void
+    {
+        if (! WC()->session) {
+            return;
+        }
+
+        $payload = WC()->session->get('col_last_plan_payload');
+        if (! is_array($payload)) {
+            return;
+        }
+
+        $order->update_meta_data('_col_plan_id', $payload['plan_id'] ?? '');
+        $order->update_meta_data('_col_origin_list', $payload['origin_list'] ?? []);
+        $order->update_meta_data('_col_shipment_count', (int) ($payload['shipment_count'] ?? 0));
+        $order->update_meta_data('_col_per_shipment_cost', $payload['per_shipment_rates'] ?? []);
+    }
+
+    private function resolve_shipment_plan(array $cart_lines): array
+    {
+        $plan_candidates = $this->shipment_planner->build_plan($cart_lines);
+        $strategy = apply_filters('col_shipment_strategy', $this->settings->all()['shipment_strategy'] ?? 'balanced', $plan_candidates, $cart_lines);
+
+        $single = $plan_candidates['single_origin'];
+        $split = $plan_candidates['split_shipment'];
+
+        if (! $single['is_available']) {
+            $selected = $split;
+            $strategy = 'split_fallback';
+        } elseif (! $split['is_available']) {
+            $selected = $single;
+            $strategy = 'single_only';
+        } else {
+            $selected = match ($strategy) {
+                'termurah' => $this->pick_min_shipments($single, $split),
+                'tercepat' => $this->pick_min_shipments($single, $split),
+                default => $this->pick_balanced($single, $split),
+            };
+        }
+
+        return [
+            'is_available' => ! empty($selected['shipments']),
+            'plan_id' => 'col-plan-' . wp_generate_uuid4(),
+            'strategy' => $strategy,
+            'shipments' => $selected['shipments'] ?? [],
+        ];
+    }
+
+    private function pick_min_shipments(array $single, array $split): array
+    {
+        return count($single['shipments']) <= count($split['shipments']) ? $single : $split;
+    }
+
+    private function pick_balanced(array $single, array $split): array
+    {
+        return $single['score'] <= $split['score'] ? $single : $split;
     }
 
     private function build_context(array $package): array
     {
-        $weight = 0;
+        $cart_lines = [];
         foreach ($package['contents'] ?? [] as $line) {
-            $weight += (int) (($line['data']->get_weight() ?: 0) * 1000) * (int) ($line['quantity'] ?? 1);
+            $product = $line['data'] ?? null;
+            if (! $product || ! method_exists($product, 'get_id')) {
+                continue;
+            }
+
+            $cart_lines[] = [
+                'product_id' => (int) $product->get_id(),
+                'quantity' => (int) ($line['quantity'] ?? 1),
+                'unit_weight_gram' => max(1, (int) (($product->get_weight() ?: 0) * 1000)),
+            ];
         }
+
+        $total_weight = array_reduce($cart_lines, static function (int $carry, array $line): int {
+            return $carry + ($line['quantity'] * $line['unit_weight_gram']);
+        }, 0);
 
         return [
             'destination_city' => $package['destination']['city'] ?? '',
             'destination_postcode' => $package['destination']['postcode'] ?? '',
             'destination_district_code' => $package['destination']['state'] ?? '',
-            'weight_gram' => max(1, $weight),
+            'weight_gram' => max(1, $total_weight),
             'cart_total' => WC()->cart ? (float) WC()->cart->get_subtotal() : 0,
             'product_tags' => [],
             'is_remote_area' => false,
+            'cart_lines' => $cart_lines,
         ];
     }
 
-    private function build_cache_key(array $context): string
+    private function build_cache_key(array $context, array $shipment): string
     {
         $settings = $this->settings->all();
         return md5(implode('|', [
             $settings['provider'],
+            $shipment['origin_region_code'] ?? '',
             $context['destination_city'],
             $context['destination_postcode'],
-            $context['weight_gram'],
+            $shipment['weight_gram'],
             implode(',', $settings['enabled_couriers']),
         ]));
     }
 
-    private function fetch_rates_with_antidown(array $context, string $cache_key): array
+    private function fetch_rates_with_antidown(array $context, string $cache_key, array $shipment): array
     {
         $cached = $this->get_cache($cache_key);
         if (! empty($cached)) {
@@ -100,7 +208,12 @@ class COL_Shipping_Service
         }
 
         $settings = $this->settings->all();
-        $live = $this->simulate_provider_call($settings['enabled_couriers'], $context['weight_gram']);
+        $live = $this->simulate_provider_call(
+            $settings['enabled_couriers'],
+            (int) $shipment['weight_gram'],
+            (string) ($shipment['origin_region_code'] ?? ''),
+            (string) $context['destination_district_code']
+        );
 
         if (! empty($live)) {
             $this->set_cache($cache_key, $live, (int) $settings['cache_ttl_seconds']);
@@ -128,19 +241,20 @@ class COL_Shipping_Service
         ]];
     }
 
-    private function simulate_provider_call(array $couriers, int $weight_gram): array
+    private function simulate_provider_call(array $couriers, int $weight_gram, string $origin_region_code, string $destination_region_code): array
     {
         if ($weight_gram > 30000) {
             return [];
         }
 
+        $distance_factor = $origin_region_code === $destination_region_code ? 1000 : 2500;
         $result = [];
         foreach ($couriers as $courier) {
             $result[] = [
                 'courier' => $courier,
                 'service' => 'REG',
-                'eta_label' => '2-3 hari',
-                'price' => 14000 + (int) ceil($weight_gram / 1000) * 2500,
+                'eta_label' => $origin_region_code === $destination_region_code ? '1-2 hari' : '2-4 hari',
+                'price' => 12000 + $distance_factor + (int) ceil($weight_gram / 1000) * 2000,
             ];
         }
 
