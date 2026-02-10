@@ -67,6 +67,22 @@ Plugin membuat custom table (prefix `wp_col_` mengikuti prefix database WordPres
 - `woocommerce_shipping_methods`
 - `admin_menu`
 
+
+## Demo
+
+Demo interaktif tersedia dalam bentuk halaman PHP sederhana yang menjalankan simulasi komponen utama plugin.
+
+- Jalankan dari root repo: `php -S 127.0.0.1:8090`
+- Buka link demo: `http://127.0.0.1:8090/demo/index.php`
+
+Halaman demo menampilkan output real-time untuk:
+
+- Shipment planner (single-origin & split shipment).
+- Packaging optimizer (pemilihan box + berat volumetrik).
+- Shipment rate aggregator.
+- COD risk rule engine.
+- Address intelligence analyzer.
+
 ## Pengujian
 
 Repository sudah menyiapkan unit test berbasis PHPUnit di folder `tests/`.
