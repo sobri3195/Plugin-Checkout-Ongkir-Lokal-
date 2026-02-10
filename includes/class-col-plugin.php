@@ -11,6 +11,7 @@ require_once __DIR__ . '/class-col-logger.php';
 require_once __DIR__ . '/class-col-origin-repository.php';
 require_once __DIR__ . '/class-col-shipment-planner.php';
 require_once __DIR__ . '/class-col-shipment-rate-aggregator.php';
+require_once __DIR__ . '/class-col-packaging-optimizer.php';
 require_once __DIR__ . '/class-col-pickup-point-provider.php';
 require_once __DIR__ . '/class-col-pickup-point-service.php';
 require_once __DIR__ . '/class-col-cod-risk-service.php';
@@ -48,12 +49,14 @@ class COL_Plugin
         $origin_repository = new COL_Origin_Repository($wpdb);
         $shipment_planner = new COL_Shipment_Planner($origin_repository);
         $shipment_rate_aggregator = new COL_Shipment_Rate_Aggregator();
+        $packaging_optimizer = new COL_Packaging_Optimizer();
         $this->shipping_service = new COL_Shipping_Service(
             $this->settings,
             $this->rule_engine,
             $this->logger,
             $shipment_planner,
-            $shipment_rate_aggregator
+            $shipment_rate_aggregator,
+            $packaging_optimizer
         );
         $pickup_point_provider = new COL_Pickup_Point_Provider($this->settings);
         $this->pickup_point_service = new COL_Pickup_Point_Service(
