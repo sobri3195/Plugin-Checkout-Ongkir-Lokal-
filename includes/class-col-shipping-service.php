@@ -56,7 +56,8 @@ class COL_Shipping_Service
         private COL_Logger $logger,
         private COL_Shipment_Planner $shipment_planner,
         private COL_Shipment_Rate_Aggregator $shipment_rate_aggregator,
-        private COL_Packaging_Optimizer $packaging_optimizer
+        private COL_Packaging_Optimizer $packaging_optimizer,
+        private COL_Shipping_Recommendation_Engine $recommendation_engine
     ) {
     }
 
@@ -64,6 +65,7 @@ class COL_Shipping_Service
     {
         add_action('col_calculate_shipping_package', [$this, 'calculate_and_add_rates'], 10, 2);
         add_action('woocommerce_checkout_create_order', [$this, 'save_plan_order_metadata'], 10, 2);
+        add_action('woocommerce_review_order_before_submit', [$this, 'track_checkout_started']);
     }
 
     public function add_shipping_method(array $methods): array
@@ -104,7 +106,8 @@ class COL_Shipping_Service
         }
 
         $aggregated_rates = $this->shipment_rate_aggregator->aggregate($shipment_rates);
-        $rate_rule_snapshot = [];
+        $ab_variant = $this->resolve_ab_variant();
+        $score_input = [];
         $meta_payload = [
             'plan_id' => $plan_result['plan_id'],
             'strategy' => $plan_result['strategy'],
@@ -112,7 +115,7 @@ class COL_Shipping_Service
             'shipment_count' => count($optimized_shipments),
             'shipments' => $optimized_shipments,
             'per_shipment_rates' => $shipment_rates,
-            'destination_area' => (string) ($context['destination_district_code'] ?? ''),
+            'ab_variant' => $ab_variant,
         ];
 
         foreach ($aggregated_rates as $rate) {
@@ -133,17 +136,13 @@ class COL_Shipping_Service
 
             $method->add_rate([
                 'id' => $rate_id,
-                'label' => sprintf(
-                    '%s - %s (%s, %d pengiriman)',
-                    strtoupper($computed['courier']),
-                    $computed['service'],
-                    $computed['eta_label'],
-                    $rate['shipment_count']
-                ),
+                'label' => $label,
                 'cost' => $computed['price'],
                 'meta_data' => [
                     'col_plan_payload' => wp_json_encode($meta_payload),
                     'col_service_key' => $rate_id,
+                    'col_sr_badges' => $label_badges,
+                    'col_sr_is_recommended' => ($recommendation['recommended_rate_id'] ?? '') === $rate_id ? 'yes' : 'no',
                 ],
             ]);
         }
@@ -152,6 +151,15 @@ class COL_Shipping_Service
 
         if (WC()->session) {
             WC()->session->set('col_last_plan_payload', $meta_payload);
+
+            $chosen = WC()->session->get('chosen_shipping_methods');
+            if (
+                $ab_variant === 'with_recommendation'
+                && ($recommendation['recommended_rate_id'] ?? '') !== ''
+                && (! is_array($chosen) || empty($chosen[0]))
+            ) {
+                WC()->session->set('chosen_shipping_methods', [(string) $recommendation['recommended_rate_id']]);
+            }
         }
     }
 
